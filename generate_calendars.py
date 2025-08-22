@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import re, json, uuid, time
+import re, json, uuid, time, sys
 from datetime import datetime, timedelta, timezone
 import requests
 from bs4 import BeautifulSoup
@@ -7,8 +7,13 @@ from bs4 import BeautifulSoup
 CONFIG = "times.json"
 OUTPUT = "cs2.ics"
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36",
-    "Accept-Language": "pt-BR,pt;q=0.9,en;q=0.8"
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                  "(KHTML, like Gecko) Chrome/115.0 Safari/537.36",
+    "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Connection": "keep-alive",
+    "Cache-Control": "no-cache",
+    "Pragma": "no-cache"
 }
 TZID = "America/Sao_Paulo"
 HLTV = "https://www.hltv.org"
@@ -62,23 +67,37 @@ def load_cfg():
     past_results = int(cfg.get("past_results", 5))
     return teams, future_days, past_results
 
-def get(url):
-    r = requests.get(url, headers=HEADERS, timeout=25)
-    r.raise_for_status()
-    return r.text
+def http_get(url, tries=5, backoff=2.0):
+    last_exc=None
+    for i in range(tries):
+        try:
+            r = requests.get(url, headers=HEADERS, timeout=25)
+            if r.status_code == 200:
+                return r.text
+            # retry on 4xx/5xx
+            last_exc = Exception(f"HTTP {r.status_code} for {url}")
+        except Exception as e:
+            last_exc = e
+        time.sleep(backoff * (i+1))
+    raise last_exc
 
 def resolve_team(name: str):
-    q = requests.utils.quote(str(name))
-    html = get(f"{HLTV}/search?query={q}")
-    m = re.search(r'href="(/team/(\d+)/[^"]+)"', html)
-    if not m: return None, None
-    return m.group(1), m.group(2)  # path, id
+    try:
+        q = requests.utils.quote(str(name))
+        html = http_get(f"{HLTV}/search?query={q}")
+        m = re.search(r'href="(/team/(\d+)/[^"]+)"', html)
+        if not m: return None, None
+        return m.group(1), m.group(2)  # path, id
+    except Exception:
+        return None, None
 
 def parse_upcoming(team_id: str, days_ahead: int):
-    html = get(f"{HLTV}/matches?team={team_id}")
+    try:
+        html = http_get(f"{HLTV}/matches?team={team_id}")
+    except Exception:
+        return []
     soup = BeautifulSoup(html, "lxml")
     events = []
-    # Procura anchors de partidas
     for a in soup.select('a[href^="/matches/"]'):
         # timestamp
         ts = None
@@ -88,8 +107,7 @@ def parse_upcoming(team_id: str, days_ahead: int):
                 ts = int(tsel.get("data-unix"))
             except Exception:
                 pass
-        if not ts: 
-            # às vezes o tempo está poucos nós acima
+        if not ts:
             up = a
             for _ in range(3):
                 if hasattr(up, "find"):
@@ -104,15 +122,14 @@ def parse_upcoming(team_id: str, days_ahead: int):
         start = datetime.fromtimestamp(ts/1000, tz=timezone.utc).astimezone()
         if start > now_local() + timedelta(days=days_ahead):
             continue
-        # nomes
-        tnames = [el.get_text(strip=True) for el in a.select('.matchTeamName, .matchTeam') if el.get_text(strip=True)]
+        # names
+        tnames = [el.get_text(strip=True) for el in a.select('.matchTeamName, .matchTeam, .team') if el.get_text(strip=True)]
         if len(tnames) < 2:
-            # fallback do texto
             txt = a.get_text(" ", strip=True)
             m = re.search(r"(.+?)\s+vs\s+(.+?)\s", txt, re.I)
             if m: tnames=[m.group(1), m.group(2)]
         event_name = ""
-        ev_el = a.select_one('.matchEventName') or a.find(string=re.compile(r'(BLAST|ESL|IEM|CCT|Cup|Liga|League|Series)', re.I))
+        ev_el = a.select_one('.matchEventName, .event-name') or a.find(string=re.compile(r'(BLAST|ESL|IEM|CCT|Cup|Liga|League|Series)', re.I))
         if ev_el:
             event_name = getattr(ev_el, 'get_text', lambda **k: str(ev_el))().strip()
         summary = " vs ".join(tnames[:2]) if tnames else "Partida CS2"
@@ -126,11 +143,13 @@ def parse_upcoming(team_id: str, days_ahead: int):
     return events
 
 def parse_results(team_id: str, limit: int = 5):
-    html = get(f"{HLTV}/results?team={team_id}")
+    try:
+        html = http_get(f"{HLTV}/results?team={team_id}")
+    except Exception:
+        return []
     soup = BeautifulSoup(html, "lxml")
     events = []
     for a in soup.select('a[href^="/matches/"]')[:limit]:
-        # não colocamos horário passado como futuro; apenas como marcador informativo (1 min)
         tnames = [el.get_text(strip=True) for el in a.select('.team') if el.get_text(strip=True)]
         txt = a.get_text(" ", strip=True)
         m = re.search(r"(.+?)\s+(\d+)\s*-\s*(\d+)\s+(.+)", txt)
@@ -140,7 +159,7 @@ def parse_results(team_id: str, limit: int = 5):
         event_name = evname.get_text(strip=True) if evname else ""
         summary = f"[Final] {match_name} {score}"
         if event_name: summary += f" — {event_name}"
-        start = now_local() + timedelta(minutes=1)  # marcador curto
+        start = now_local() + timedelta(minutes=1)
         events.append({
             "start": start,
             "end": start + timedelta(minutes=1),
@@ -150,25 +169,38 @@ def parse_results(team_id: str, limit: int = 5):
     return events
 
 def main():
-    teams, future_days, past_results = load_cfg()
+    try:
+        teams, future_days, past_results = load_cfg()
+    except Exception as e:
+        # Fallback: times padrão
+        teams, future_days, past_results = ["FURIA","paiN","Imperial","MIBR","Legacy"], 90, 5
     all_events = []
     for name in teams:
         path, tid = resolve_team(name)
         if not tid:
             continue
         all_events.extend(parse_upcoming(tid, future_days))
-        all_events.extend(parse_results(tid, past_results))
-    # Se nada achado, cria evento INFO para evitar 404 silencioso
+        if past_results > 0:
+            all_events.extend(parse_results(tid, past_results))
     if not all_events:
-        t = now_local() + timedelta(minutes=1)
+        t = now_local() + timedelta(minutes=2)
         all_events = [{
             "start": t, "end": t+timedelta(minutes=1),
-            "summary": "[INFO] Sem partidas encontradas agora",
-            "description": "Calendário ativo. Atualiza automaticamente."
+            "summary": "[INFO] Calendário ativo — aguardando próximas partidas",
+            "description": "Sem partidas confirmadas encontradas agora."
         }]
-    # Ordena e escreve
     all_events.sort(key=lambda e: e["start"])
     write_ics(all_events, now_local())
 
 if __name__ == "__main__":
-    main()
+    # Nunca falhar pipeline: sempre gerar algum ICS
+    try:
+        main()
+    except Exception as e:
+        t = now_local() + timedelta(minutes=2)
+        write_ics([{
+            "start": t, "end": t+timedelta(minutes=1),
+            "summary": "[ERRO] Falha temporária na atualização — tente novamente",
+            "description": str(e)[:140]
+        }], now_local())
+        sys.exit(0)
