@@ -1,11 +1,24 @@
 {
   "teams": [
-    "FURIA",
-    "paiN",
-    "Imperial",
-    "MIBR",
-    "Legacy"
-  ],
-  "future_days": 90,
-  "past_results": 5
+    {
+      "name": "FURIA",
+      "id": "8297"
+    },
+    {
+      "name": "paiN",
+      "id": "4773"
+    },
+    {
+      "name": "Legacy",
+      "id": "12468"
+    },
+    {
+      "name": "Imperial",
+      "id": "9455"
+    },
+    {
+      "name": "MIBR",
+      "id": "9215"
+    }
+  ]
 }

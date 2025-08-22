@@ -20,7 +20,7 @@
   <div class="sub">Link único (adicione no Google Agenda): <a href="cs2.ics">cs2.ics</a></div>
   <div class="small" id="updated">Atualizado…</div>
   <div class="card">
-    <div class="row"><span class="pill">Próximos jogos</span></div>
+    <div class="row"><span class="pill">Próximos jogos & resultados (HLTV)</span></div>
     <div id="list">Carregando…</div>
   </div>
 <script>
@@ -51,7 +51,7 @@ fetch('cs2.ics').then(r=>{
 }).then(txt=>{
   const m = txt.match(/^X-WR-CALDESC:(.*)$/m);
   if(m) document.getElementById('updated').textContent = m[1];
-  const evs = parseICS(txt).slice(0,100);
+  const evs = parseICS(txt).slice(0,150);
   const list = evs.length ? evs.map(e=>`<div class="card"><div>${brDate(e.date)}</div><div class="small">${e.summary}</div></div>`).join('') : '<div>Nada por enquanto.</div>';
   document.getElementById('list').innerHTML = list;
 }).catch(()=>{

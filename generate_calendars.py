@@ -58,15 +58,6 @@ def write_ics(events, updated):
     with open(OUTPUT,"w",encoding="utf-8",newline="\n") as f:
         f.write(content)
 
-def load_cfg():
-    with open(CONFIG,"r",encoding="utf-8") as f:
-        cfg=json.load(f)
-    teams = cfg.get("teams", [])
-    if not isinstance(teams, list): teams = []
-    future_days = int(cfg.get("future_days", 90))
-    past_results = int(cfg.get("past_results", 5))
-    return teams, future_days, past_results
-
 def http_get(url, tries=5, backoff=2.0):
     last_exc=None
     for i in range(tries):
@@ -74,24 +65,13 @@ def http_get(url, tries=5, backoff=2.0):
             r = requests.get(url, headers=HEADERS, timeout=25)
             if r.status_code == 200:
                 return r.text
-            # retry on 4xx/5xx
             last_exc = Exception(f"HTTP {r.status_code} for {url}")
         except Exception as e:
             last_exc = e
         time.sleep(backoff * (i+1))
     raise last_exc
 
-def resolve_team(name: str):
-    try:
-        q = requests.utils.quote(str(name))
-        html = http_get(f"{HLTV}/search?query={q}")
-        m = re.search(r'href="(/team/(\d+)/[^"]+)"', html)
-        if not m: return None, None
-        return m.group(1), m.group(2)  # path, id
-    except Exception:
-        return None, None
-
-def parse_upcoming(team_id: str, days_ahead: int):
+def parse_upcoming(team_id: str):
     try:
         html = http_get(f"{HLTV}/matches?team={team_id}")
     except Exception:
@@ -99,30 +79,21 @@ def parse_upcoming(team_id: str, days_ahead: int):
     soup = BeautifulSoup(html, "lxml")
     events = []
     for a in soup.select('a[href^="/matches/"]'):
-        # timestamp
         ts = None
         tsel = a.select_one('[data-unix]') or a.find(attrs={"data-unix": True})
-        if tsel:
-            try:
-                ts = int(tsel.get("data-unix"))
-            except Exception:
-                pass
-        if not ts:
-            up = a
-            for _ in range(3):
+        if not tsel:
+            up=a
+            for _ in range(4):
                 if hasattr(up, "find"):
                     tsel = up.find(attrs={"data-unix": True})
-                    if tsel:
-                        try:
-                            ts=int(tsel.get("data-unix")); break
-                        except: pass
+                    if tsel: break
                 up = getattr(up, "parent", None)
+        if tsel:
+            try: ts = int(tsel.get("data-unix"))
+            except: ts = None
         if not ts: 
             continue
         start = datetime.fromtimestamp(ts/1000, tz=timezone.utc).astimezone()
-        if start > now_local() + timedelta(days=days_ahead):
-            continue
-        # names
         tnames = [el.get_text(strip=True) for el in a.select('.matchTeamName, .matchTeam, .team') if el.get_text(strip=True)]
         if len(tnames) < 2:
             txt = a.get_text(" ", strip=True)
@@ -142,24 +113,33 @@ def parse_upcoming(team_id: str, days_ahead: int):
         })
     return events
 
-def parse_results(team_id: str, limit: int = 5):
+def parse_results(team_id: str):
     try:
         html = http_get(f"{HLTV}/results?team={team_id}")
     except Exception:
         return []
     soup = BeautifulSoup(html, "lxml")
     events = []
-    for a in soup.select('a[href^="/matches/"]')[:limit]:
+    for a in soup.select('a[href^="/matches/"]'):
+        ts = None
+        tsel = a.select_one('[data-unix]') or a.find(attrs={"data-unix": True})
+        if tsel:
+            try: ts = int(tsel.get("data-unix"))
+            except: ts = None
         tnames = [el.get_text(strip=True) for el in a.select('.team') if el.get_text(strip=True)]
         txt = a.get_text(" ", strip=True)
-        m = re.search(r"(.+?)\s+(\d+)\s*-\s*(\d+)\s+(.+)", txt)
-        score = f"{m.group(2)}-{m.group(3)}" if m else ""
+        m = re.search(r"(\d+)\s*-\s*(\d+)", txt)
+        score = f"{m.group(1)}-{m.group(2)}" if m else ""
         match_name = " vs ".join(tnames[:2]) if len(tnames)>=2 else "Resultado CS2"
         evname = a.find(class_="event-name")
         event_name = evname.get_text(strip=True) if evname else ""
-        summary = f"[Final] {match_name} {score}"
+        summary = f"[Final] {match_name}"
+        if score: summary += f" {score}"
         if event_name: summary += f" — {event_name}"
-        start = now_local() + timedelta(minutes=1)
+        if ts:
+            start = datetime.fromtimestamp(ts/1000, tz=timezone.utc).astimezone()
+        else:
+            start = now_local() - timedelta(hours=1)
         events.append({
             "start": start,
             "end": start + timedelta(minutes=1),
@@ -170,18 +150,17 @@ def parse_results(team_id: str, limit: int = 5):
 
 def main():
     try:
-        teams, future_days, past_results = load_cfg()
-    except Exception as e:
-        # Fallback: times padrão
-        teams, future_days, past_results = ["FURIA","paiN","Imperial","MIBR","Legacy"], 90, 5
+        with open(CONFIG,"r",encoding="utf-8") as f:
+            cfg=json.load(f)
+        teams = cfg.get("teams", [])
+    except Exception:
+        teams = []
     all_events = []
-    for name in teams:
-        path, tid = resolve_team(name)
-        if not tid:
-            continue
-        all_events.extend(parse_upcoming(tid, future_days))
-        if past_results > 0:
-            all_events.extend(parse_results(tid, past_results))
+    for t in teams:
+        tid = str(t.get("id","")).strip()
+        if not tid: continue
+        all_events.extend(parse_upcoming(tid))
+        all_events.extend(parse_results(tid))
     if not all_events:
         t = now_local() + timedelta(minutes=2)
         all_events = [{
@@ -193,14 +172,13 @@ def main():
     write_ics(all_events, now_local())
 
 if __name__ == "__main__":
-    # Nunca falhar pipeline: sempre gerar algum ICS
     try:
         main()
     except Exception as e:
-        t = now_local() + timedelta(minutes=2)
+        t = datetime.now().astimezone() + timedelta(minutes=2)
         write_ics([{
             "start": t, "end": t+timedelta(minutes=1),
             "summary": "[ERRO] Falha temporária na atualização — tente novamente",
             "description": str(e)[:140]
-        }], now_local())
+        }], datetime.now().astimezone())
         sys.exit(0)

@@ -35,6 +35,6 @@ jobs:
           if git diff --cached --quiet; then
             echo "Sem mudanças"
           else
-            git commit -m "Auto: atualiza cs2.ics"
+            git commit -m "Auto: atualiza cs2.ics (HLTV IDs)"
             git push
           fi

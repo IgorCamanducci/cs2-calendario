@@ -1,10 +1,10 @@
-# CS2 — Calendário único (HLTV, 90 dias)
-- `cs2.ics`: calendário único (próximos jogos + últimos resultados).
-- `index.html`: exibe os eventos lendo o `cs2.ics`.
-- `times.json`: edite os times; flexível.
-- `generate_calendars.py`: busca HLTV (headers + retry) e gera ICS no root.
-- `.github/workflows/update.yml`: roda a cada 30 min (commit automático).
+# CS2 — Calendário único (HLTV IDs)
+- Um único `cs2.ics` (root) com **próximos jogos** e **resultados** dos times (HLTV).
+- `index.html` mostra exatamente o que está no `.ics`.
+- `times.json` define times com **IDs do HLTV** (sem /search).
+- `generate_calendars.py` usa `/matches?team=ID` e `/results?team=ID` com headers+retry.
+- Action roda a cada 30min e commita só se houver mudança.
 
-URLs após publicar:
+URLs depois de publicar:
 - Página: https://SEU_USUARIO.github.io/cs2-calendario/
 - ICS:    https://SEU_USUARIO.github.io/cs2-calendario/cs2.ics
