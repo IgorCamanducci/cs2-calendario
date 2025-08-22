@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Calendário CS2 — Times BR</title>
+  <style>
+    body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial;background:#0b0b0b;color:#eaeaea;margin:0;padding:24px}
+    h1{margin:0 0 8px;font-size:24px}
+    .sub{opacity:.8;margin-bottom:16px}
+    .card{background:#121212;border:1px solid #222;border-radius:14px;padding:16px;margin:12px 0}
+    .row{display:flex;gap:12px;flex-wrap:wrap}
+    .pill{display:inline-block;padding:6px 10px;border:1px solid #2e2e2e;border-radius:999px}
+    a{color:#8bdcff;text-decoration:none}
+    .btn{display:inline-block;padding:10px 14px;border-radius:10px;border:1px solid #2e2e2e}
+    .small{font-size:12px;opacity:.75}
+  </style>
+</head>
+<body>
+  <h1>Calendário CS2 — Times BR</h1>
+  <div class="sub">Link único (adicione no Google Agenda): <a href="cs2.ics">cs2.ics</a></div>
+  <div class="small" id="updated">Atualizado…</div>
+  <div class="card">
+    <div class="row"><span class="pill">Próximos jogos</span></div>
+    <div id="list">Carregando…</div>
+  </div>
+<script>
+function parseICS(text){
+  const events=[];
+  const blocks = text.split("BEGIN:VEVENT").slice(1);
+  for(const b of blocks){
+    const get=(key)=>{
+      const re = new RegExp("^"+key+"(?::|;[^:]*:)(.*)$","m");
+      const m = b.match(re); return m?m[1].trim():null;
+    };
+    const sum=get("SUMMARY");
+    let dt = get("DTSTART");
+    if(!dt){ // TZID variant
+      const m = b.match(/^DTSTART;[^:]*:(.*)$/m);
+      dt = m?m[1].trim():null;
+    }
+    if(!dt || !sum) continue;
+    // Parse YYYYMMDDTHHMMSS
+    const y=dt.slice(0,4), mo=dt.slice(4,6), d=dt.slice(6,8), h=dt.slice(9,11), mi=dt.slice(11,13), s=dt.slice(13,15);
+    const date = new Date(`${y}-${mo}-${d}T${h}:${mi}:${s}`);
+    events.push({summary:sum, date});
+  }
+  return events.sort((a,b)=>a.date-b.date);
+}
+
+function brDate(d){
+  return new Intl.DateTimeFormat('pt-BR', {weekday:'short', day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}).format(d);
+}
+
+fetch('cs2.ics').then(r=>{
+  if(!r.ok) throw new Error('ICS não encontrado');
+  return r.text();
+}).then(txt=>{
+  // Atualização
+  const m = txt.match(/^X-WR-CALDESC:(.*)$/m);
+  if(m) document.getElementById('updated').textContent = m[1];
+  const evs = parseICS(txt).slice(0,50);
+  const list = evs.length ? evs.map(e=>`<div class="card"><div>${brDate(e.date)}</div><div class="small">${e.summary}</div></div>`).join('') : '<div>Nada por enquanto.</div>';
+  document.getElementById('list').innerHTML = list;
+}).catch(err=>{
+  document.getElementById('list').textContent = 'Ainda sem calendário gerado.';
+});
+</script>
+</body>
+</html>
